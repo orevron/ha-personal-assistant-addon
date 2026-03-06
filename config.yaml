@@ -1,6 +1,6 @@
 name: "Personal Assistant"
 description: "AI personal assistant powered by LangGraph + Ollama with RAG, learning, and Telegram integration"
-version: "0.1.5"
+version: "0.1.6"
 slug: "personal_assistant"
 url: "https://github.com/YOUR_USER/ha-personal-assistant-addon"
 arch:
