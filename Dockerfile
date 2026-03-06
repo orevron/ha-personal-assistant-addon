@@ -10,19 +10,25 @@ RUN apk add --no-cache \
     libffi-dev \
     gcc \
     musl-dev \
-    git \
-    gettext
+    curl
 
-# Build sqlite-vec from source as a loadable extension
-# gettext provides envsubst which the Makefile needs to generate sqlite-vec.h
-RUN cd /tmp \
-    && git clone --depth 1 https://github.com/asg017/sqlite-vec.git \
-    && cd sqlite-vec \
-    && make loadable \
+# Download pre-built sqlite-vec loadable extension from GitHub releases
+# Avoids musl/Alpine compilation issues with the latest source
+ARG BUILD_ARCH=aarch64
+RUN SQLITE_VEC_VERSION="0.1.6" \
+    && case "${BUILD_ARCH}" in \
+    aarch64) ARCH="linux-aarch64" ;; \
+    amd64)   ARCH="linux-x86_64" ;; \
+    armhf)   ARCH="linux-x86_64" ;; \
+    armv7)   ARCH="linux-x86_64" ;; \
+    i386)    ARCH="linux-x86_64" ;; \
+    *)       ARCH="linux-x86_64" ;; \
+    esac \
     && mkdir -p /usr/local/lib/sqlite-vec \
-    && cp dist/vec0.so /usr/local/lib/sqlite-vec/ \
-    && cd / \
-    && rm -rf /tmp/sqlite-vec
+    && curl -fsSL \
+    "https://github.com/asg017/sqlite-vec/releases/download/v${SQLITE_VEC_VERSION}/sqlite-vec-${SQLITE_VEC_VERSION}-loadable-${ARCH}.tar.gz" \
+    | tar xz -C /usr/local/lib/sqlite-vec \
+    && ls -la /usr/local/lib/sqlite-vec/
 
 # Copy application code
 COPY app /app
