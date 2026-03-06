@@ -9,91 +9,6 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build & Release
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Full history for changelog generation
-
-      - name: Get version from config.yaml
-        id: version
-        run: |
-          VERSION=$(grep '^version:' config.yaml | sed 's/version: *"\?\([^"]*\)"\?/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Detected version: $VERSION"
-
-      - name: Generate release notes from commits
-        id: release_notes
-        run: |
-          # Get commits since last tag (or all if no tags)
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -n "$LAST_TAG" ]; then
-            COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
-          else
-            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges -20)
-          fi
-
-          # Write to file (multi-line output)
-          echo "## Changes" > release_notes.md
-          echo "" >> release_notes.md
-          echo "$COMMITS" >> release_notes.md
-          echo "" >> release_notes.md
-          echo "---" >> release_notes.md
-          echo "*Auto-generated release from commit $(git rev-parse --short HEAD)*" >> release_notes.md
-
-      - name: Create release tag
-        id: tag
-        run: |
-          TAG="v${{ steps.version.outputs.version }}"
-
-          # If tag already exists, append build number
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            BUILD_NUM=$(git tag -l "${TAG}-*" | wc -l | tr -d ' ')
-            BUILD_NUM=$((BUILD_NUM + 1))
-            TAG="${TAG}-b${BUILD_NUM}"
-          fi
-
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "Release tag: $TAG"
-
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
-
-      - name: Build add-on archive
-        run: |
-          # Create a clean release archive
-          mkdir -p release
-          tar czf "release/personal-assistant-addon-${{ steps.tag.outputs.tag }}.tar.gz" \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='release' \
-            --exclude='plans' \
-            --exclude='.gitignore' \
-            --exclude='*.md' \
-            config.yaml \
-            Dockerfile \
-            run.sh \
-            repository.yaml \
-            app/
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: "Release ${{ steps.tag.outputs.tag }}"
-          body_path: release_notes.md
-          files: release/*.tar.gz
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   lint:
     name: Lint & Validate
     runs-on: ubuntu-latest
@@ -110,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install ruff
+          pip install ruff pyyaml
 
       - name: Lint with ruff
         run: |
@@ -137,3 +52,98 @@ jobs:
             echo "Dockerfile may have issues"
             exit 1
           fi
+
+  release:
+    name: Bump Version & Release
+    runs-on: ubuntu-latest
+    needs: lint  # Only release if lint passes
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump patch version in config.yaml
+        id: bump
+        run: |
+          # Extract current version
+          CURRENT=$(grep '^version:' config.yaml | sed 's/version: *"\?\([^"]*\)"\?/\1/')
+          echo "Current version: $CURRENT"
+
+          # Split into major.minor.patch
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "New version: $NEW_VERSION"
+
+          # Update config.yaml in place
+          sed -i "s/^version:.*/version: \"${NEW_VERSION}\"/" config.yaml
+
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Commit version bump
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add config.yaml
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }} [skip ci]"
+          git push origin main
+
+      - name: Generate release notes
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges | grep -v "\[skip ci\]")
+          else
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges -20 | grep -v "\[skip ci\]")
+          fi
+
+          echo "## Changes" > release_notes.md
+          echo "" >> release_notes.md
+          if [ -n "$COMMITS" ]; then
+            echo "$COMMITS" >> release_notes.md
+          else
+            echo "- Patch release" >> release_notes.md
+          fi
+          echo "" >> release_notes.md
+          echo "---" >> release_notes.md
+          echo "*Auto-generated release from commit $(git rev-parse --short HEAD)*" >> release_notes.md
+
+      - name: Create tag and release
+        run: |
+          TAG="v${{ steps.bump.outputs.version }}"
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Build add-on archive
+        run: |
+          TAG="v${{ steps.bump.outputs.version }}"
+          mkdir -p release
+          tar czf "release/personal-assistant-addon-${TAG}.tar.gz" \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='release' \
+            --exclude='plans' \
+            --exclude='.gitignore' \
+            --exclude='*.md' \
+            config.yaml \
+            Dockerfile \
+            run.sh \
+            repository.yaml \
+            app/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.version }}
+          name: "v${{ steps.bump.outputs.version }}"
+          body_path: release_notes.md
+          files: release/*.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
