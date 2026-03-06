@@ -8,10 +8,9 @@ Checkpoint persistence via SQLite at /data/assistant.db.
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Any, Annotated
 
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -159,7 +158,6 @@ class PersonalAssistantAgent:
         """
         chat_id = event_data.get("chat_id")
         callback_data = event_data.get("data", "")
-        message_id = event_data.get("id")
 
         if not chat_id or not callback_data:
             return

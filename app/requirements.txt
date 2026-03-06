@@ -4,7 +4,6 @@ langchain-openai>=0.3
 langchain-google-genai>=2.0
 langgraph>=0.3
 langgraph-checkpoint-sqlite>=2.0
-sqlite-vec>=0.1
 sqlalchemy>=2.0
 aiosqlite>=0.20
 duckduckgo-search>=6.0

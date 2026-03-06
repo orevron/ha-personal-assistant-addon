@@ -13,6 +13,7 @@ import logging
 import os
 import signal
 import sys
+from typing import Any
 
 from const import CONFIG_PATH, DB_PATH
 from ha_client import HAClient
@@ -227,7 +228,7 @@ async def main() -> None:
 
 async def rag_reindex_loop(
     config: dict,
-    rag_engine: "RAGEngine",
+    rag_engine: Any,
     reindex_hours: int = 24,
     history_hours: int = 6,
 ) -> None:

@@ -9,8 +9,8 @@ Database lives at /data/assistant.db.
 
 from __future__ import annotations
 
-import json
 import logging
+import os
 import sqlite3
 from typing import Any
 
@@ -18,6 +18,14 @@ from rag.embeddings import EmbeddingModel
 from rag.indexer import RAGIndexer
 
 _LOGGER = logging.getLogger(__name__)
+
+# Paths to try for the sqlite-vec loadable extension (.so)
+_VEC_EXTENSION_PATHS = [
+    os.environ.get("SQLITE_VEC_PATH", ""),
+    "/usr/local/lib/sqlite-vec/vec0",
+    "/usr/lib/sqlite3/vec0",
+    "vec0",
+]
 
 
 class RAGEngine:
@@ -42,6 +50,7 @@ class RAGEngine:
             db_path=db_path,
         )
         self._initialized = False
+        self._has_vec_extension = False
 
     async def _ensure_initialized(self) -> None:
         """Ensure the RAG tables and sqlite-vec extension are loaded."""
@@ -50,13 +59,31 @@ class RAGEngine:
 
         conn = sqlite3.connect(self._db_path)
         try:
-            # Try to load sqlite-vec extension
+            # Try to load sqlite-vec extension from known paths
             try:
                 conn.enable_load_extension(True)
-                conn.load_extension("vec0")
+                loaded = False
+                for ext_path in _VEC_EXTENSION_PATHS:
+                    if not ext_path:
+                        continue
+                    try:
+                        conn.load_extension(ext_path)
+                        self._has_vec_extension = True
+                        loaded = True
+                        _LOGGER.info(
+                            "Loaded sqlite-vec extension from %s", ext_path
+                        )
+                        break
+                    except Exception:
+                        continue
+                if not loaded:
+                    _LOGGER.warning(
+                        "Could not load sqlite-vec extension from any path — "
+                        "using fallback cosine similarity"
+                    )
             except Exception:
                 _LOGGER.warning(
-                    "Could not load sqlite-vec extension — "
+                    "SQLite extension loading not supported — "
                     "using fallback cosine similarity"
                 )
 
