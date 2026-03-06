@@ -8,6 +8,7 @@ arch:
   - amd64
 init: false
 homeassistant_api: true
+hassio_api: true
 auth_api: true
 map:
   - config:rw
