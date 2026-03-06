@@ -1,0 +1,72 @@
+name: "Personal Assistant"
+description: "AI personal assistant powered by LangGraph + Ollama with RAG, learning, and Telegram integration"
+version: "0.1.0"
+slug: "personal_assistant"
+url: "https://github.com/YOUR_USER/ha-personal-assistant-addon"
+arch:
+  - aarch64
+  - amd64
+init: false
+homeassistant_api: true
+auth_api: true
+map:
+  - config:rw
+
+options:
+  ollama_url: "http://192.168.1.97:11434"
+  ollama_model: "gpt-oss:20b"
+  embedding_model: "nomic-embed-text"
+  cloud_llm_provider: "none"
+  cloud_llm_api_key: ""
+  cloud_llm_model: ""
+  cloud_llm_send_profile: false
+  cloud_llm_send_ha_state: false
+  persona: "You are a helpful personal home assistant."
+  session_timeout_minutes: 30
+  rag_reindex_hours: 24
+  history_reindex_hours: 6
+  influxdb_url: ""
+  influxdb_token: ""
+  influxdb_org: ""
+  influxdb_bucket: ""
+  pii_blocked_keywords: []
+  action_policy_allowed_domains: "*"
+  action_policy_restricted_domains:
+    - lock
+    - camera
+  action_policy_blocked_domains:
+    - homeassistant
+  action_policy_require_confirmation:
+    - lock.unlock
+    - lock.lock
+    - camera.turn_on
+    - camera.turn_off
+  log_level: "info"
+
+schema:
+  ollama_url: url
+  ollama_model: str
+  embedding_model: str
+  cloud_llm_provider: "list(none|openai|gemini)"
+  cloud_llm_api_key: "str?"
+  cloud_llm_model: "str?"
+  cloud_llm_send_profile: bool
+  cloud_llm_send_ha_state: bool
+  persona: str
+  session_timeout_minutes: "int(1,1440)"
+  rag_reindex_hours: "int(1,168)"
+  history_reindex_hours: "int(1,168)"
+  influxdb_url: "url?"
+  influxdb_token: "str?"
+  influxdb_org: "str?"
+  influxdb_bucket: "str?"
+  pii_blocked_keywords:
+    - str
+  action_policy_allowed_domains: str
+  action_policy_restricted_domains:
+    - str
+  action_policy_blocked_domains:
+    - str
+  action_policy_require_confirmation:
+    - str
+  log_level: "list(debug|info|warning|error)"
