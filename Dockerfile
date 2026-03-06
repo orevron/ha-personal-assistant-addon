@@ -12,14 +12,19 @@ RUN apk add --no-cache \
     musl-dev \
     git
 
-# Build sqlite-vec from source (no pip package for Alpine/musl)
+# Build sqlite-vec from source as a loadable extension
+# Compile the single-file amalgamation directly with gcc (avoids Makefile/envsubst deps)
 RUN cd /tmp \
     && git clone --depth 1 https://github.com/asg017/sqlite-vec.git \
     && cd sqlite-vec \
-    && make loadable \
-    && cp dist/vec0.so /usr/lib/sqlite3/ \
+    && gcc -fPIC -shared -O2 \
+    -I. \
+    -DSQLITE_CORE \
+    sqlite-vec.c \
+    -o vec0.so \
+    -lm \
     && mkdir -p /usr/local/lib/sqlite-vec \
-    && cp dist/vec0.so /usr/local/lib/sqlite-vec/ \
+    && cp vec0.so /usr/local/lib/sqlite-vec/ \
     && cd / \
     && rm -rf /tmp/sqlite-vec
 
