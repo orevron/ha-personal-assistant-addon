@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import sys
 
 from const import CONFIG_PATH, DB_PATH
@@ -30,6 +31,41 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     stream=sys.stdout,
 )
+
+# Sanitize sensitive data from logs
+class SanitizedFormatter(logging.Formatter):
+    """Log formatter that strips tokens and sensitive data."""
+
+    REDACT_PATTERNS = [
+        ("SUPERVISOR_TOKEN", "Bearer "),
+        ("api_key", "api_key"),
+    ]
+
+    def format(self, record: logging.LogRecord) -> str:
+        msg = super().format(record)
+        # Redact bearer tokens
+        import re
+        msg = re.sub(
+            r"Bearer\s+[A-Za-z0-9._-]+",
+            "Bearer [REDACTED]",
+            msg,
+        )
+        # Redact API keys
+        msg = re.sub(
+            r"(api[_-]?key[\"']?\s*[:=]\s*[\"']?)[A-Za-z0-9._-]{10,}",
+            r"\1[REDACTED]",
+            msg,
+            flags=re.IGNORECASE,
+        )
+        return msg
+
+
+# Apply sanitized formatter to root logger
+for handler in logging.root.handlers:
+    handler.setFormatter(
+        SanitizedFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    )
+
 _LOGGER = logging.getLogger("personal_assistant")
 
 
@@ -74,7 +110,12 @@ async def main() -> None:
     await init_database(DB_PATH)
     _LOGGER.info("Database initialized at %s", DB_PATH)
 
-    # 4. Initialize components
+    # 4. Initialize multi-user manager
+    from memory.multi_user import MultiUserManager
+    user_manager = MultiUserManager(DB_PATH)
+    await user_manager.ensure_initialized()
+
+    # 5. Initialize components
     from agent.router import LLMRouter
     from memory.profile_manager import ProfileManager
     from memory.conversation_memory import ConversationMemory
@@ -98,17 +139,17 @@ async def main() -> None:
         rag_engine=rag_engine,
     )
 
-    # 5. Start HA client (connects REST + WebSocket)
+    # 6. Start HA client (connects REST + WebSocket)
     await ha.start()
 
-    # 6. Subscribe to Telegram events via WebSocket
+    # 7. Subscribe to Telegram events via WebSocket
     await ha.subscribe_events("telegram_text", agent.handle_telegram_text)
     await ha.subscribe_events(
         "telegram_callback", agent.handle_telegram_callback
     )
     _LOGGER.info("Subscribed to Telegram events")
 
-    # 7. Start background workers
+    # 8. Start background workers
     from memory.learning_worker import LearningWorker
     from memory.event_learner import EventLearner
 
@@ -128,7 +169,17 @@ async def main() -> None:
     )
     asyncio.create_task(event_learner.run())
 
-    # 8. Start RAG re-indexing background task
+    # 9. Start proactive notification system
+    from notifications import ProactiveNotifier
+
+    notifier = ProactiveNotifier(config=config, ha_client=ha)
+    # Get known user chat IDs for notifications
+    chat_ids = await user_manager.get_user_chat_ids()
+    if chat_ids:
+        notifier.set_chat_ids(chat_ids)
+    asyncio.create_task(notifier.run())
+
+    # 10. Start RAG re-indexing background task
     asyncio.create_task(
         rag_reindex_loop(
             config, rag_engine,
@@ -138,14 +189,40 @@ async def main() -> None:
     )
     _LOGGER.info("Background workers started")
 
-    # 9. Run forever (WebSocket listener keeps us alive)
+    # 11. Set up graceful shutdown
+    shutdown_event = asyncio.Event()
+
+    def _signal_handler() -> None:
+        _LOGGER.info("Received shutdown signal")
+        shutdown_event.set()
+
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _signal_handler)
+
+    # 12. Run forever
     _LOGGER.info("Personal Assistant add-on is ready!")
     try:
-        await ha.run_forever()
+        # Wait for either WS disconnect or shutdown signal
+        ws_task = asyncio.create_task(ha.run_forever())
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+
+        done, pending = await asyncio.wait(
+            [ws_task, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+
     except KeyboardInterrupt:
-        _LOGGER.info("Shutting down...")
+        _LOGGER.info("Keyboard interrupt received")
     finally:
+        _LOGGER.info("Shutting down...")
+        await notifier.stop()
+        await learning_worker.stop()
+        await event_learner.stop()
         await ha.stop()
+        _LOGGER.info("Shutdown complete")
 
 
 async def rag_reindex_loop(
@@ -155,31 +232,40 @@ async def rag_reindex_loop(
     history_hours: int = 6,
 ) -> None:
     """Periodically re-index HA data for the RAG engine."""
-    _LOGGER = logging.getLogger("personal_assistant.rag_reindex")
+    logger = logging.getLogger("personal_assistant.rag_reindex")
 
-    # Initial indexing on startup
-    try:
-        await rag_engine.full_reindex()
-        _LOGGER.info("Initial RAG indexing complete")
-    except Exception:
-        _LOGGER.exception("Initial RAG indexing failed")
+    # Initial indexing on startup (with retry)
+    for attempt in range(3):
+        try:
+            await rag_engine.full_reindex()
+            logger.info("Initial RAG indexing complete")
+            break
+        except Exception:
+            logger.exception(
+                "Initial RAG indexing failed (attempt %d/3)", attempt + 1
+            )
+            if attempt < 2:
+                await asyncio.sleep(30)
 
     history_counter = 0
+    full_counter = 0
     while True:
-        # Sleep for 1 hour, then check what needs re-indexing
-        await asyncio.sleep(3600)
+        await asyncio.sleep(3600)  # Check every hour
         history_counter += 1
+        full_counter += 1
 
         try:
             if history_counter >= history_hours:
                 await rag_engine.reindex_history()
                 history_counter = 0
-                _LOGGER.info("History re-indexed")
+                logger.info("History re-indexed")
 
-            # Full re-index every N hours (tracked separately)
-            # The full loop runs every reindex_hours iterations
+            if full_counter >= reindex_hours:
+                await rag_engine.full_reindex()
+                full_counter = 0
+                logger.info("Full re-index complete")
         except Exception:
-            _LOGGER.exception("RAG re-indexing error")
+            logger.exception("RAG re-indexing error")
 
 
 if __name__ == "__main__":
