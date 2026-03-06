@@ -10,21 +10,17 @@ RUN apk add --no-cache \
     libffi-dev \
     gcc \
     musl-dev \
-    git
+    git \
+    gettext
 
 # Build sqlite-vec from source as a loadable extension
-# Compile the single-file amalgamation directly with gcc (avoids Makefile/envsubst deps)
+# gettext provides envsubst which the Makefile needs to generate sqlite-vec.h
 RUN cd /tmp \
     && git clone --depth 1 https://github.com/asg017/sqlite-vec.git \
     && cd sqlite-vec \
-    && gcc -fPIC -shared -O2 \
-    -I. \
-    -DSQLITE_CORE \
-    sqlite-vec.c \
-    -o vec0.so \
-    -lm \
+    && make loadable \
     && mkdir -p /usr/local/lib/sqlite-vec \
-    && cp vec0.so /usr/local/lib/sqlite-vec/ \
+    && cp dist/vec0.so /usr/local/lib/sqlite-vec/ \
     && cd / \
     && rm -rf /tmp/sqlite-vec
 
